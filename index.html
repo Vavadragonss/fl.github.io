@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Family Link Codegen</title>
+<style>
+:root{--bg:#0f1724;--card:#0b1220;--accent:#10b981;--muted:#94a3b8;--white:#e6eef8}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial;background:linear-gradient(180deg,#071029 0%,#071827 100%);color:var(--white);display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.card{width:620px;background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));border-radius:12px;padding:20px;box-shadow:0 10px 30px rgba(2,6,23,0.6)}
+h1{margin:0 0 12px;font-size:20px;font-weight:700}
+.row{display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+label{color:var(--muted);min-width:120px}
+input[type="text"],input[type="datetime-local"]{flex:1;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--white);outline:none;font-size:14px}
+.checkbox{display:inline-flex;align-items:center;gap:8px;color:var(--muted);cursor:pointer}
+button{background:var(--accent);color:#062018;padding:10px 14px;border-radius:8px;border:none;font-weight:600;cursor:pointer}
+.code{font-family:monospace;font-size:48px;letter-spacing:6px;text-align:center;padding:18px 0;user-select:all}
+.progress{height:18px;background:rgba(255,255,255,0.04);border-radius:999px;overflow:hidden;margin-bottom:8px}
+.bar{height:100%;width:0%;border-radius:999px;background:linear-gradient(90deg,var(--accent),#3b82f6)}
+.footer{display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:13px;margin-top:10px;flex-wrap:wrap;gap:6px}
+a{color:var(--muted);text-decoration:none;cursor:pointer}
+.small{font-size:13px;color:var(--muted)}
+.copy-btn{margin-left:auto;background:#3b82f6;color:white;border:none;border-radius:8px;padding:8px 10px;font-weight:600;cursor:pointer}
+.copy-btn:active{transform:scale(0.96)}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Family Link Codegen</h1>
+  <div class="row">
+    <label>Shared secret:</label>
+    <input id="secret" type="text" placeholder="Paste your shared secret here">
+  </div>
+  <div class="row">
+    <label class="checkbox"><input id="customToggle" type="checkbox">Generate for specific date/time</label>
+  </div>
+  <div class="row" id="datetimeRow" style="display:none">
+    <label>Date & time:</label>
+    <input id="datetime" type="datetime-local">
+    <button id="nowBtn">Now</button>
+  </div>
+  <div class="row" style="justify-content:center">
+    <div class="code" id="code">000000</div>
+    <button class="copy-btn" id="copyBtn">Copy</button>
+  </div>
+  <div class="progress"><div id="bar" class="bar"></div></div>
+  <div class="row" style="margin-top:6px">
+    <div class="small" id="expires">Expires in: 60:00</div>
+    <div class="small" id="validRange"></div>
+  </div>
+  <div class="footer">
+    <div>Made by <b>Vavadragons</b></div>
+    <div><a id="showSource">Show source</a></div>
+  </div>
+</div>
+<script>
+(async function(){
+  const secretEl=document.getElementById('secret');
+  const toggle=document.getElementById('customToggle');
+  const dtRow=document.getElementById('datetimeRow');
+  const dtEl=document.getElementById('datetime');
+  const nowBtn=document.getElementById('nowBtn');
+  const codeEl=document.getElementById('code');
+  const copyBtn=document.getElementById('copyBtn');
+  const barEl=document.getElementById('bar');
+  const expiresEl=document.getElementById('expires');
+  const validRangeEl=document.getElementById('validRange');
+  const showSource=document.getElementById('showSource');
+  const CODE_VALIDITY_MS=1000*60*60;
+  const CODE_GRANULARITY_MS=1000*60;
+  async function importKey(raw){
+    return await crypto.subtle.importKey('raw',raw,{name:'HMAC',hash:{name:'SHA-1'}},false,['sign']);
+  }
+  function u64ToBEBytes(n){
+    const arr=new Uint8Array(8);
+    for(let i=7;i>=0;i--){arr[i]=Number(n & 0xffn);n>>=8n;}
+    return arr;
+  }
+  async function hmacSha1(keyBytes,msgBytes){
+    const key=await importKey(keyBytes);
+    const sig=await crypto.subtle.sign('HMAC',key,msgBytes);
+    return new Uint8Array(sig);
+  }
+  async function generateFlCode(sharedSecret,customTimestampSeconds){
+    const keyStr=(sharedSecret||'').trim();
+    const keyBytes=new TextEncoder().encode(keyStr);
+    const timestampMs=BigInt(customTimestampSeconds)*1000n;
+    const codeValidityMs=BigInt(CODE_VALIDITY_MS);
+    const interval=timestampMs/codeValidityMs;
+    const intervalBeginning=interval*codeValidityMs;
+    const adjusted=intervalBeginning/BigInt(CODE_GRANULARITY_MS);
+    const msgBytes=u64ToBEBytes(adjusted);
+    const digest=await hmacSha1(keyBytes,msgBytes);
+    const offset=(digest[digest.length-1]&0xf);
+    const b0=digest[offset];
+    const b1=digest[offset+1];
+    const b2=digest[offset+2];
+    const b3=digest[offset+3];
+    const codeInt=((b0&0x7f)<<24)|(b1<<16)|(b2<<8)|b3;
+    const code=codeInt%1000000;
+    const validFromMs=Number(intervalBeginning);
+    const validToMs=validFromMs+CODE_VALIDITY_MS;
+    return {code:code.toString().padStart(6,'0'),validFromMs,validToMs};
+  }
+  function formatMMSS(sec){const m=Math.floor(sec/60);const s=sec%60;return `${m}:${s.toString().padStart(2,'0')}`;}
+  function updateUIVals(validFromMs,validToMs,remainingSec){
+    expiresEl.textContent='Expires in: '+formatMMSS(remainingSec);
+    barEl.style.width=(remainingSec/3600*100)+'%';
+    validRangeEl.textContent=`Valid: ${Math.floor(validFromMs/1000)} - ${Math.floor(validToMs/1000)}`;
+  }
+  async function refresh(){
+    const nowSec=Math.floor(Date.now()/1000);
+    let tsVal=nowSec;
+    if(toggle.checked&&dtEl.value){
+      tsVal=Math.floor(new Date(dtEl.value).getTime()/1000);
+    }
+    try{
+      const res=await generateFlCode(secretEl.value,tsVal);
+      codeEl.textContent=res.code;
+      const remaining=Math.max(0,Math.floor((res.validToMs - Date.now())/1000));
+      updateUIVals(res.validFromMs,res.validToMs,remaining);
+    }catch(e){
+      codeEl.textContent='000000';
+      updateUIVals(0,0,0);
+    }
+  }
+  toggle.addEventListener('change',()=>{
+    dtRow.style.display=toggle.checked?'flex':'none';
+    refresh();
+  });
+  nowBtn.addEventListener('click',()=>{
+    const now=new Date();
+    const localISO=now.toISOString().slice(0,16);
+    dtEl.value=localISO;
+    refresh();
+  });
+  secretEl.addEventListener('input',refresh);
+  dtEl.addEventListener('input',refresh);
+  copyBtn.addEventListener('click',async()=>{
+    try{
+      await navigator.clipboard.writeText(codeEl.textContent);
+      copyBtn.textContent='Copied!';
+      setTimeout(()=>copyBtn.textContent='Copy',1500);
+    }catch{}
+  });
+  showSource.addEventListener('click',()=>{
+    const source=document.documentElement.outerHTML;
+    const w=window.open('','_blank');
+    w.document.write('<pre style="white-space:pre-wrap;word-wrap:break-word;font-size:12px;">'+
+      source.replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))+'</pre>');
+  });
+  setInterval(refresh,1000);
+  refresh();
+})();
+</script>
+</body>
+</html>
